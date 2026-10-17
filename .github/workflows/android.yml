@@ -22,7 +22,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -93,7 +93,14 @@ jobs:
 
       - name: Build APK
         working-directory: android
-        run: gradle --no-daemon assembleDebug
+        run: |
+          set -o pipefail
+          if ! gradle --no-daemon assembleDebug 2>&1 | tee build.log; then
+            # Surface the failure as one annotation so it is readable via the API.
+            msg=$(grep -E "^e: |^w: .*error|error:|What went wrong|Caused by|^> |FAILURE" -A3 build.log | head -80 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=Gradle build failed::${msg}"
+            exit 1
+          fi
 
       - name: Name APK
         run: |
