@@ -56,7 +56,7 @@ object MirrorController {
     /** Logs a line from the app side (the Go side has its own timestamps). */
     fun log(line: String) = append(line, timestamp = true)
 
-    private fun append(line: String, timestamp: Boolean) {
+    private fun append(line: String, timestamp: Boolean = true) {
         val text = if (timestamp) "${stamp.format(Date())} [APP] $line" else line
         Log.i("doubletake", text)
         synchronized(log) {
