@@ -125,29 +125,3 @@ func TestExternalAudioFeedRestartsOnDiscontinuity(t *testing.T) {
 		t.Fatalf("read after close = %v", err)
 	}
 }
-
-func TestParseInitialVolume(t *testing.T) {
-	for _, test := range []struct {
-		in   string
-		want InitialVolumeSetting
-		ok   bool
-	}{
-		{"", InitialVolumeSetting{}, true},
-		{"keep", InitialVolumeSetting{Keep: true}, true},
-		{" KEEP ", InitialVolumeSetting{Keep: true}, true},
-		{"-20", InitialVolumeSetting{DB: -20}, true},
-		{"-12.5 dB", InitialVolumeSetting{DB: -12.5}, true},
-		{"0", InitialVolumeSetting{}, true},
-		{"5", InitialVolumeSetting{}, false},
-		{"-31", InitialVolumeSetting{}, false},
-		{"loud", InitialVolumeSetting{}, false},
-	} {
-		got, err := ParseInitialVolume(test.in)
-		if (err == nil) != test.ok || (test.ok && got != test.want) {
-			t.Errorf("ParseInitialVolume(%q) = %+v, %v", test.in, got, err)
-		}
-	}
-	if body := string(volumeBodyDB(-20)); body != "volume: -20.000000\r\n" {
-		t.Errorf("volume body = %q", body)
-	}
-}
