@@ -1,0 +1,107 @@
+name: Android
+
+on:
+  push:
+    branches: [android]
+    paths:
+      - "android/**"
+      - "mobile/**"
+      - "internal/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Test Go session against the in-repo receiver
+        run: go test -count=1 ./mobile/ ./internal/airplay/ -run 'External|Session'
+
+      - name: Install Android SDK packages
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Build Go library (gomobile bind)
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          go get golang.org/x/mobile/bind@latest
+          gomobile init
+          mkdir -p android/app/libs
+          gomobile bind -v -target android/arm64 -androidapi 30 -javapkg dtcore \
+            -ldflags "-s -w" -o android/app/libs/doubletake.aar ./mobile
+          ls -l android/app/libs
+
+      # A stable debug key lets each build install over the last one, keeping
+      # saved pairing. Repository secrets win; otherwise a key generated once
+      # is kept in the Actions cache (evicted after 7 days without builds).
+      - name: Restore cached debug key
+        id: keycache
+        uses: actions/cache@v4
+        with:
+          path: ~/.doubletake-signing
+          key: doubletake-debug-keystore-v1
+
+      - name: Prepare signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.DOUBLETAKE_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.DOUBLETAKE_KEYSTORE_PASSWORD }}
+        run: |
+          dir="$HOME/.doubletake-signing"
+          mkdir -p "$dir"
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PASSWORD" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/doubletake.jks"
+            echo "DOUBLETAKE_KEYSTORE=$RUNNER_TEMP/doubletake.jks" >> "$GITHUB_ENV"
+            echo "::add-mask::$KEYSTORE_PASSWORD"
+            echo "DOUBLETAKE_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "Signing with the repository secret key"
+            exit 0
+          fi
+          if [ ! -f "$dir/doubletake.jks" ]; then
+            head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' > "$dir/password"
+            keytool -genkeypair -keystore "$dir/doubletake.jks" -storetype PKCS12 \
+              -alias doubletake -keyalg RSA -keysize 3072 -validity 10000 \
+              -storepass "$(cat "$dir/password")" -keypass "$(cat "$dir/password")" \
+              -dname "CN=Doubletake Android debug"
+            echo "Generated a new debug signing key (uninstall older builds once)"
+          else
+            echo "Signing with the cached debug key"
+          fi
+          echo "::add-mask::$(cat "$dir/password")"
+          echo "DOUBLETAKE_KEYSTORE=$dir/doubletake.jks" >> "$GITHUB_ENV"
+          echo "DOUBLETAKE_KEYSTORE_PASSWORD=$(cat "$dir/password")" >> "$GITHUB_ENV"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
+
+      - name: Build APK
+        working-directory: android
+        run: gradle --no-daemon assembleDebug
+
+      - name: Name APK
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk \
+            "doubletake-android-${GITHUB_RUN_NUMBER}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doubletake-android-${{ github.run_number }}
+          path: doubletake-android-${{ github.run_number }}.apk
+          retention-days: 30
