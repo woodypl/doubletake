@@ -464,6 +464,12 @@ func (c *AirPlayClient) setupMirrorSession(ctx context.Context, cfg StreamConfig
 	if err := ValidateVideoCodec(string(cfg.VideoCodec)); err != nil {
 		return nil, err
 	}
+	// Validate before any request so a bad value cannot strand a half-built
+	// session on the receiver.
+	initialVolume, err := ParseInitialVolume(cfg.InitialVolume)
+	if err != nil {
+		return nil, err
+	}
 	sessionUUID := generateUUID()
 	clientDeviceID := uuidToMAC(c.sessionID)
 	senderName := pairingClientName()
@@ -1121,18 +1127,22 @@ func (c *AirPlayClient) setupMirrorSession(ctx context.Context, cfg StreamConfig
 	// state and should leave its volume untouched.
 	if cfg.NoAudio {
 		dbg("[SETUP] no-audio session: skipping SET_PARAMETER volume")
+	} else if initialVolume.Keep {
+		// Leave the receiver's current volume alone. Some receivers (for
+		// example Samsung's) are otherwise easy to blast to full scale.
+		dbg("[SETUP] initial volume=keep: skipping SET_PARAMETER volume")
 	} else {
 		// Positive dB values are invalid here and current receivers may
 		// interpret them as zero gain. Real senders send the sender's own
-		// slider value; 0 dB is this sender's fixed choice.
-		volumeBody := audioVolumeBody(false)
+		// slider value; the default is 0 dB (full scale).
+		volumeBody := volumeBodyDB(initialVolume.DB)
 		if _, _, err := setupRTSPRequest("SET_PARAMETER", audioURI, "text/parameters", volumeBody, nil); err != nil {
 			if !controlConnectionUsable {
 				return nil, fmt.Errorf("SET_PARAMETER volume: %w", err)
 			}
 			dbg("[SETUP] SET_PARAMETER volume failed (non-fatal): %v", err)
 		} else {
-			dbg("[SETUP] SET_PARAMETER volume=0 sent")
+			dbg("[SETUP] SET_PARAMETER volume=%.1f dB sent", initialVolume.DB)
 		}
 		// Send volume twice (pcap shows real senders do this)
 		if _, _, err := setupRTSPRequest("SET_PARAMETER", audioURI, "text/parameters", volumeBody, nil); err != nil && !controlConnectionUsable {
@@ -2432,9 +2442,38 @@ func (s *MirrorSession) SetAudioMuted(muted bool) error {
 
 func audioVolumeBody(muted bool) []byte {
 	if muted {
-		return []byte("volume: -144.000000\r\n")
+		return volumeBodyDB(-144)
 	}
-	return []byte("volume: 0.000000\r\n")
+	return volumeBodyDB(0)
+}
+
+func volumeBodyDB(db float64) []byte {
+	return []byte(fmt.Sprintf("volume: %.6f\r\n", db))
+}
+
+// InitialVolumeSetting is the parsed form of StreamConfig.InitialVolume.
+type InitialVolumeSetting struct {
+	Keep bool    // send no volume at setup
+	DB   float64 // otherwise the AirPlay level to set: -30 (quiet) to 0 (full)
+}
+
+// ParseInitialVolume parses an initial-volume setting: "" (0 dB, the default
+// full-scale behaviour), "keep" (do not change the receiver's volume) or a
+// level in dB from -30 to 0, optionally suffixed with "dB".
+func ParseInitialVolume(value string) (InitialVolumeSetting, error) {
+	text := strings.TrimSpace(strings.ToLower(value))
+	switch text {
+	case "":
+		return InitialVolumeSetting{}, nil
+	case "keep", "none", "off":
+		return InitialVolumeSetting{Keep: true}, nil
+	}
+	text = strings.TrimSpace(strings.TrimSuffix(text, "db"))
+	db, err := strconv.ParseFloat(text, 64)
+	if err != nil || math.IsNaN(db) || db > 0 || db < -30 {
+		return InitialVolumeSetting{}, fmt.Errorf("initial volume %q: want keep or a level from -30 to 0 dB", value)
+	}
+	return InitialVolumeSetting{DB: db}, nil
 }
 
 // AudioStream returns the audio stream for this session (may be nil).
