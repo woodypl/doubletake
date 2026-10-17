@@ -39,6 +39,7 @@ class MirrorService : Service() {
         const val EXTRA_DEBUG = "debug"
         const val EXTRA_BITRATE = "bitrate"
         const val EXTRA_LATENCY = "latency"
+        const val EXTRA_VOLUME = "volume"
         const val EXTRA_FORCE_PAIR = "forcePair"
 
         private const val CHANNEL_ID = "mirroring"
@@ -118,10 +119,11 @@ class MirrorService : Service() {
             noAudio = !intent.getBooleanExtra(EXTRA_AUDIO, true)
             debug = intent.getBooleanExtra(EXTRA_DEBUG, false)
             forcePair = intent.getBooleanExtra(EXTRA_FORCE_PAIR, false)
+            initialVolume = intent.getStringExtra(EXTRA_VOLUME) ?: "keep"
         }
         MirrorController.log("starting session to ${config.host}:${config.port} " +
             "(audio=${!config.noAudio}, debug=${config.debug}, bitrate=${bitrateKbps}kbps, " +
-            "latency=${if (config.targetLatencyMs == 0L) "auto" else "${config.targetLatencyMs}ms"}, forcePair=${config.forcePair})")
+            "latency=${if (config.targetLatencyMs == 0L) "auto" else "${config.targetLatencyMs}ms"}, forcePair=${config.forcePair}, volume=${config.initialVolume})")
 
         val s = Mobile.newSession(config, listener)
         session = s

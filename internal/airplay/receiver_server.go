@@ -91,6 +91,8 @@ type ReceiverStats struct {
 	SetupRequests     uint64
 	RecordRequests    uint64
 	ParameterRequests uint64
+	// LastParameterBody is the body of the most recent SET_PARAMETER.
+	LastParameterBody string
 	FeedbackRequests  uint64
 	TeardownRequests  uint64
 	EventConnections  uint64
@@ -121,6 +123,7 @@ type receiverAtomicStats struct {
 	audioConnections  atomic.Uint64
 	recordRequests    atomic.Uint64
 	parameterRequests atomic.Uint64
+	lastParameter     atomic.Value // string
 	feedbackRequests  atomic.Uint64
 	teardownRequests  atomic.Uint64
 }
@@ -805,6 +808,7 @@ func (c *receiverConnection) dispatch(request receiverRequest) (receiverResponse
 		return c.handleRecord(), nil
 	case request.method == "SET_PARAMETER":
 		s.stats.parameterRequests.Add(1)
+		s.stats.lastParameter.Store(string(request.body))
 		if c.sessionState != receiverSessionReady {
 			return c.invalidSessionState(request.method), nil
 		}
@@ -1555,6 +1559,9 @@ func (s *ReceiverServer) Stats() ReceiverStats {
 		ParameterRequests: s.stats.parameterRequests.Load(),
 		FeedbackRequests:  s.stats.feedbackRequests.Load(),
 		TeardownRequests:  s.stats.teardownRequests.Load(),
+	}
+	if last, ok := s.stats.lastParameter.Load().(string); ok {
+		stats.LastParameterBody = last
 	}
 	s.mediaMu.Lock()
 	media := s.mediaTotals

@@ -264,3 +264,29 @@ func TestSessionStopWhileWaitingForCode(t *testing.T) {
 		t.Fatalf("states = %v, want stopped", host.states)
 	}
 }
+
+func TestSessionInitialVolume(t *testing.T) {
+	for _, test := range []struct {
+		setting   string
+		wantCount uint64
+		wantBody  string
+	}{
+		{"keep", 0, ""},
+		{"-20", 2, "volume: -20.000000\r\n"},
+		{"", 2, "volume: 0.000000\r\n"},
+	} {
+		t.Run("volume="+test.setting, func(t *testing.T) {
+			server, addr, port := startReceiver(t, airplay.ReceiverConfig{Profile: airplay.ReceiverProfileLG})
+			cfg := NewConfig(addr)
+			cfg.Port = port
+			cfg.CredentialsPath = filepath.Join(t.TempDir(), "credentials.json")
+			cfg.InitialVolume = test.setting
+			runUntilMedia(t, server, cfg, "")
+			stats := server.Stats()
+			if stats.ParameterRequests != test.wantCount || stats.LastParameterBody != test.wantBody {
+				t.Fatalf("SET_PARAMETER count=%d last=%q, want %d %q",
+					stats.ParameterRequests, stats.LastParameterBody, test.wantCount, test.wantBody)
+			}
+		})
+	}
+}

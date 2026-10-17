@@ -64,6 +64,10 @@ type Config struct {
 	Password string
 	// ForcePair discards saved credentials and pairs again.
 	ForcePair bool
+	// InitialVolume is the receiver volume set when audio starts: "keep"
+	// leaves it unchanged, "-30".."0" sets a level in dB, and "" sends 0 dB
+	// (full volume, doubletake's desktop default).
+	InitialVolume string
 }
 
 // NewConfig returns a Config with defaults for host.
@@ -216,6 +220,9 @@ func (s *Session) run() error {
 	airplay.SetDebugMode(cfg.Debug)
 	airplay.SetAssumeWirelessConnection(true)
 	airplay.SetTargetLatency(time.Duration(cfg.TargetLatencyMs) * time.Millisecond)
+	if _, err := airplay.ParseInitialVolume(cfg.InitialVolume); err != nil {
+		return err
+	}
 
 	s.listener.OnState(StateConnecting, "")
 	credential := cfg.Password
@@ -353,10 +360,11 @@ func (s *Session) run() error {
 
 	s.listener.OnState(StateSettingUp, "")
 	streamCfg := airplay.StreamConfig{
-		FPS:        cfg.FPS,
-		Bitrate:    cfg.BitrateKbps,
-		VideoCodec: airplay.VideoCodecH264,
-		NoAudio:    cfg.NoAudio,
+		FPS:           cfg.FPS,
+		Bitrate:       cfg.BitrateKbps,
+		VideoCodec:    airplay.VideoCodecH264,
+		NoAudio:       cfg.NoAudio,
+		InitialVolume: cfg.InitialVolume,
 	}
 	var capture *airplay.ScreenCapture
 	prepareVideo := func(width, height int, codec airplay.VideoCodec) (airplay.VideoPreparationResult, error) {

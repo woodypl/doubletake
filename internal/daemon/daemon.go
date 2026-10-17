@@ -100,20 +100,23 @@ type Config struct {
 	NoEncrypt   bool
 	DirectKey   bool
 	NoAudio     bool
-	ShowCursor  bool
-	Code        string // default pairing/Digest credential; request Pin overrides it
+	// InitialVolume is passed to StreamConfig.InitialVolume.
+	InitialVolume string
+	ShowCursor    bool
+	Code          string // default pairing/Digest credential; request Pin overrides it
 }
 
 func (d *Daemon) mirrorStreamConfig() airplay.StreamConfig {
 	return airplay.StreamConfig{
-		FPS:        d.cfg.FPS,
-		Bitrate:    d.cfg.Bitrate,
-		VideoCodec: d.cfg.VideoCodec,
-		NoEncrypt:  d.cfg.NoEncrypt,
-		DirectKey:  d.cfg.DirectKey,
-		NoAudio:    d.cfg.NoAudio,
-		PortMin:    d.cfg.PortMin,
-		PortMax:    d.cfg.PortMax,
+		FPS:           d.cfg.FPS,
+		Bitrate:       d.cfg.Bitrate,
+		VideoCodec:    d.cfg.VideoCodec,
+		NoEncrypt:     d.cfg.NoEncrypt,
+		DirectKey:     d.cfg.DirectKey,
+		NoAudio:       d.cfg.NoAudio,
+		InitialVolume: d.cfg.InitialVolume,
+		PortMin:       d.cfg.PortMin,
+		PortMax:       d.cfg.PortMax,
 	}
 }
 

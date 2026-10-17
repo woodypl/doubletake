@@ -32,5 +32,11 @@
             android:name=".MirrorService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+
+        <provider
+            android:name=".LogProvider"
+            android:authorities="${applicationId}.logs"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

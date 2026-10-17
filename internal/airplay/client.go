@@ -1326,6 +1326,10 @@ type StreamConfig struct {
 	NoEncrypt              bool          // Disable encryption for debugging
 	DirectKey              bool          // Use shk/shiv directly without SHA-512 derivation
 	NoAudio                bool          // Disable audio streaming
+	// InitialVolume controls the volume sent at setup: "" for 0 dB (full
+	// scale, the historical behaviour), "keep" to leave the receiver alone,
+	// or a level from -30 to 0 dB. See ParseInitialVolume.
+	InitialVolume string
 
 	// PortMin/PortMax bound the local ports used for the audio UDP triple
 	// (timing/control/data, 3 consecutive ports). The receiver's event channel

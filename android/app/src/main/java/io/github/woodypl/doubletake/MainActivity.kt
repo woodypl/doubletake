@@ -39,6 +39,7 @@ class MainActivity : Activity(), MirrorController.Observer {
     private lateinit var repairBox: CheckBox
     private lateinit var bitrateField: EditText
     private lateinit var latencyField: EditText
+    private lateinit var volumeField: EditText
     private lateinit var startButton: Button
     private lateinit var statusText: TextView
     private lateinit var receiversRow: LinearLayout
@@ -58,6 +59,7 @@ class MainActivity : Activity(), MirrorController.Observer {
         debugBox.isChecked = prefs.getBoolean("debug", true)
         bitrateField.setText(prefs.getInt("bitrate", 8000).toString())
         latencyField.setText(prefs.getInt("latency", 0).toString())
+        volumeField.setText(prefs.getString("volume", "keep"))
     }
 
     override fun onStart() {
@@ -116,6 +118,14 @@ class MainActivity : Activity(), MirrorController.Observer {
             addView(latencyField, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
         column.addView(numbers)
+
+        column.addView(label("Projector volume on connect: keep, or -30 (quiet) to 0 (full) dB"))
+        volumeField = EditText(this).apply {
+            hint = "keep"
+            inputType = InputType.TYPE_CLASS_TEXT
+            isSingleLine = true
+        }
+        column.addView(volumeField, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
 
         startButton = Button(this).apply { setOnClickListener { onStartStop() } }
         column.addView(startButton, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
@@ -230,6 +240,7 @@ class MainActivity : Activity(), MirrorController.Observer {
                     .putExtra(MirrorService.EXTRA_FORCE_PAIR, repairBox.isChecked)
                     .putExtra(MirrorService.EXTRA_BITRATE, bitrateField.text.toString().toIntOrNull() ?: 8000)
                     .putExtra(MirrorService.EXTRA_LATENCY, latencyField.text.toString().toIntOrNull() ?: 0)
+                    .putExtra(MirrorService.EXTRA_VOLUME, volumeSetting())
                 repairBox.isChecked = false
                 startForegroundService(intent)
             }
@@ -241,6 +252,9 @@ class MainActivity : Activity(), MirrorController.Observer {
             }
         }
     }
+
+    /** "keep" unless the field holds something; the Go side validates it. */
+    private fun volumeSetting(): String = volumeField.text.toString().trim().ifEmpty { "keep" }
 
     private fun splitHostPort(text: String): Pair<String, Int> {
         val colon = text.lastIndexOf(':')
@@ -257,6 +271,7 @@ class MainActivity : Activity(), MirrorController.Observer {
             .putBoolean("debug", debugBox.isChecked)
             .putInt("bitrate", bitrateField.text.toString().toIntOrNull() ?: 8000)
             .putInt("latency", latencyField.text.toString().toIntOrNull() ?: 0)
+            .putString("volume", volumeSetting())
             .apply()
     }
 
@@ -275,7 +290,7 @@ class MainActivity : Activity(), MirrorController.Observer {
             else -> "Idle"
         }
         val editable = !active
-        listOf(hostField, audioBox, debugBox, repairBox, bitrateField, latencyField).forEach { it.isEnabled = editable }
+        listOf(hostField, audioBox, debugBox, repairBox, bitrateField, latencyField, volumeField).forEach { it.isEnabled = editable }
         if (state != Mobile.StateNeedCode) {
             codeDialog?.dismiss()
             codeDialog = null
@@ -313,14 +328,20 @@ class MainActivity : Activity(), MirrorController.Observer {
     // --- Log and pairing actions ---------------------------------------------
 
     private fun shareLog() {
-        // Without a FileProvider the log travels as text; cap it well below
-        // the binder transaction limit and keep the most recent lines.
-        val text = MirrorController.logText().takeLast(400_000)
-        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_SUBJECT, "Doubletake log")
-            putExtra(Intent.EXTRA_TEXT, text)
-        }, "Share log"))
+        try {
+            val uri = LogProvider.writeSnapshot(this, MirrorController.logText())
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, "Doubletake log")
+                putExtra(Intent.EXTRA_STREAM, uri)
+                clipData = ClipData.newRawUri("Doubletake log", uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(send, "Share log").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+        } catch (e: Exception) {
+            MirrorController.log("share log failed: $e")
+            Toast.makeText(this, "Sharing failed: ${e.message}", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun saveLog() {
