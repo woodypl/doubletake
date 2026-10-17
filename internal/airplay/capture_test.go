@@ -906,33 +906,69 @@ func TestDetectGstEncoderSelectionContract(t *testing.T) {
 
 func TestVAWaylandPipelineKeepsFramesInVAMemory(t *testing.T) {
 	encoder := encoderResult{parts: gstStage{"vah264enc"}, rawFormat: "NV12", codec: VideoCodecH264, inputMemory: encoderInputVAMemory}
-	for _, size := range [][2]int{{0, 0}, {1920, 1080}, {1279, 719}, {1, 1}} {
-		pipeline := buildVAWaylandVideoPipeline(3, 42, 30, encoder, size[0], size[1], true)
-		joined := strings.Join(pipeline, " ")
-		for _, forbidden := range []string{"always-copy", "videoconvert", "videoscale", "compositor"} {
-			if strings.Contains(joined, forbidden) {
-				t.Errorf("VA pipeline must not copy or process portal frames on the CPU: %s", joined)
+	for _, live := range []bool{false, true} {
+		for _, size := range [][2]int{{0, 0}, {1920, 1080}, {1279, 719}, {1, 1}} {
+			pipeline := buildVAWaylandVideoPipeline(3, 42, 30, encoder, size[0], size[1], true, live)
+			joined := strings.Join(pipeline, " ")
+			for _, forbidden := range []string{"always-copy", "videoconvert", "videoscale", "! compositor"} {
+				if strings.Contains(joined, forbidden) {
+					t.Errorf("VA pipeline must not copy or process portal frames on the CPU: %s", joined)
+				}
+			}
+			pacer := "! videorate skip-to-first=true !"
+			if live {
+				pacer = "! vacompositor force-live=true ignore-inactive-pads=true !"
+			}
+			if !strings.Contains(joined, pacer) {
+				t.Errorf("VA pipeline (live=%t) is missing pacing stage %q: %s", live, pacer, joined)
+			}
+			for _, required := range []string{"keepalive-time=34", "disable-passthrough=true", "add-borders=true", "video/x-raw(ANY),pixel-aspect-ratio=1/1", "video/x-raw(memory:VAMemory),format=NV12"} {
+				if !strings.Contains(joined, required) {
+					t.Errorf("VA pipeline is missing %q: %s", required, joined)
+				}
+			}
+			if size[0] > 1 && size[1] > 1 {
+				want := fmt.Sprintf("width=%d,height=%d,pixel-aspect-ratio=1/1", size[0]&^1, size[1]&^1)
+				if !strings.Contains(joined, want) {
+					t.Errorf("VA scaling must use an even receiver canvas: %s", joined)
+				}
+			} else if strings.Contains(joined, "width=") || strings.Contains(joined, "height=") {
+				t.Errorf("invalid receiver size must not constrain the capture: %s", joined)
+			}
+			// The VA path must retain the same timestamp-preserving output as other
+			// sources, since the sender schedules video from the encoded buffer PTS.
+			suffix := appendGstVideoEncoding(nil, encoder, true)
+			if !reflect.DeepEqual(pipeline[len(pipeline)-len(suffix):], suffix) {
+				t.Errorf("VA pipeline changed the shared encoding/output suffix: %s", joined)
 			}
 		}
-		for _, required := range []string{"keepalive-time=34", "disable-passthrough=true", "add-borders=true", "video/x-raw(ANY),pixel-aspect-ratio=1/1", "video/x-raw(memory:VAMemory),format=NV12"} {
-			if !strings.Contains(joined, required) {
-				t.Errorf("VA pipeline is missing %q: %s", required, joined)
-			}
+	}
+}
+
+func TestWaylandCapturePlansPreferLiveVAPacing(t *testing.T) {
+	encoder := encoderResult{parts: gstStage{"vah264enc"}, rawFormat: "NV12", codec: VideoCodecH264, inputMemory: encoderInputVAMemory}
+	modes := func(plans []waylandCapturePlan) []waylandPipelineMode {
+		out := make([]waylandPipelineMode, len(plans))
+		for i, plan := range plans {
+			out[i] = plan.mode
 		}
-		if size[0] > 1 && size[1] > 1 {
-			want := fmt.Sprintf("width=%d,height=%d,pixel-aspect-ratio=1/1", size[0]&^1, size[1]&^1)
-			if !strings.Contains(joined, want) {
-				t.Errorf("VA scaling must use an even receiver canvas: %s", joined)
-			}
-		} else if strings.Contains(joined, "width=") || strings.Contains(joined, "height=") {
-			t.Errorf("invalid receiver size must not constrain the capture: %s", joined)
-		}
-		// The VA path must retain the same timestamp-preserving output as other
-		// sources, since the sender schedules video from the encoded buffer PTS.
-		suffix := appendGstVideoEncoding(nil, encoder, true)
-		if !reflect.DeepEqual(pipeline[len(pipeline)-len(suffix):], suffix) {
-			t.Errorf("VA pipeline changed the shared encoding/output suffix: %s", joined)
-		}
+		return out
+	}
+	withCompositor := func(element string) bool { return element == "vapostproc" || element == "vacompositor" }
+	got := modes(waylandCapturePlans(encoder, withCompositor))
+	want := []waylandPipelineMode{waylandPipelineVAMemoryLive, waylandPipelineVAMemory, waylandPipelineSystemMemory}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("plans with vacompositor = %v, want %v", got, want)
+	}
+	postprocOnly := func(element string) bool { return element == "vapostproc" }
+	got = modes(waylandCapturePlans(encoder, postprocOnly))
+	want = []waylandPipelineMode{waylandPipelineVAMemory, waylandPipelineSystemMemory}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("plans without vacompositor = %v, want %v", got, want)
+	}
+	live := strings.Join(buildWaylandVideoPipelineForPlan(3, 42, 30, waylandCapturePlan{encoder: encoder, mode: waylandPipelineVAMemoryLive}, 1920, 1080, true), " ")
+	if !strings.Contains(live, "vacompositor force-live=true") || strings.Contains(live, "videorate") {
+		t.Fatalf("live VA plan pipeline = %s", live)
 	}
 }
 
