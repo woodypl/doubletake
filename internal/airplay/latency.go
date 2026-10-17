@@ -38,11 +38,24 @@ type localNetworkInterface struct {
 
 const networkInterfaceClassPath = "/sys/class/net"
 
+// assumeWirelessConnection lets hosts that cannot enumerate network
+// interfaces (Android apps since API 30) select the wireless profile directly.
+var assumeWirelessConnection atomic.Bool
+
+// SetAssumeWirelessConnection forces the high-latency wireless screen profile
+// instead of inspecting the local interface of the control connection.
+func SetAssumeWirelessConnection(enabled bool) {
+	assumeWirelessConnection.Store(enabled)
+}
+
 // connectionLatencyHintForConnection mirrors the sender's use of the control
 // connection interface latency hint. A wireless route uses the high-latency
 // screen profile, which leaves enough receiver headroom for normal Wi-Fi jitter.
 // Unknown and non-wireless interfaces retain the ordinary profile.
 func connectionLatencyHintForConnection(conn net.Conn) (connectionLatencyHint, string) {
+	if assumeWirelessConnection.Load() {
+		return connectionLatencyHigh, "assumed-wireless"
+	}
 	if conn == nil {
 		return connectionLatencyNormal, ""
 	}
