@@ -214,6 +214,9 @@ doubletake
 # Disable audio for video-only mirroring
 doubletake -no-audio
 
+# Leave the receiver's volume alone (by default it is set to full on connect)
+doubletake -initial-volume keep
+
 # Connect to a specific Apple TV
 doubletake -target 192.168.1.77
 
@@ -277,6 +280,7 @@ doubletake-ctl disconnect
 | `-no-encrypt` | false | Disable RTSP header encryption (debugging only) |
 | `-direct-key` | false | Use `shk`/`shiv` directly without SHA-512 derivation |
 | `-no-audio` | false | Disable audio streaming |
+| `-initial-volume` | | Receiver volume set when audio starts: `keep` leaves it unchanged, or a level from `-30` (quiet) to `0` dB (full). Empty sends 0 dB, i.e. full volume |
 | `-test` | false | Use synthetic video source |
 | `-daemonize` | false | Run as background daemon with Unix socket control interface |
 | `-socket` | `$XDG_RUNTIME_DIR/doubletake.sock` | Daemon control socket path |
