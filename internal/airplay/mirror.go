@@ -464,6 +464,12 @@ func (c *AirPlayClient) setupMirrorSession(ctx context.Context, cfg StreamConfig
 	if err := ValidateVideoCodec(string(cfg.VideoCodec)); err != nil {
 		return nil, err
 	}
+	// Validate before any request so a bad value cannot strand a half-built
+	// session on the receiver.
+	initialVolume, err := ParseInitialVolume(cfg.InitialVolume)
+	if err != nil {
+		return nil, err
+	}
 	sessionUUID := generateUUID()
 	clientDeviceID := uuidToMAC(c.sessionID)
 	senderName := pairingClientName()
