@@ -823,6 +823,9 @@ const (
 	waylandPipelineSystemMemory waylandPipelineMode = iota
 	waylandPipelineVAMemory
 	waylandPipelineVAPostprocPlainRaw
+	// waylandPipelineVAMemoryLive is waylandPipelineVAMemory paced by a live
+	// vacompositor instead of videorate (see buildVAWaylandVideoPipeline).
+	waylandPipelineVAMemoryLive
 )
 
 type waylandCapturePlan struct {
@@ -836,6 +839,8 @@ func (p waylandCapturePlan) String() string {
 		encoder = p.encoder.parts[0]
 	}
 	switch p.mode {
+	case waylandPipelineVAMemoryLive:
+		return encoder + " with native VA frame import and live VA pacing"
 	case waylandPipelineVAMemory:
 		return encoder + " with native VA frame import"
 	case waylandPipelineVAPostprocPlainRaw:
@@ -996,8 +1001,16 @@ func appendGstVideoEncoding(args []string, encoder encoderResult, timestampedOut
 
 // buildVAWaylandVideoPipeline imports portal buffers without a CPU copy, then
 // keeps conversion, scaling, and encoding in VA memory. PipeWire keepalives
-// supply idle frames; videorate limits them to the requested output rate.
-func buildVAWaylandVideoPipeline(fd int, nodeID uint32, fps int, encoder encoderResult, maxWidth, maxHeight int, timestampedOutput bool) []string {
+// supply idle frames.
+//
+// With liveCompositor, a live vacompositor (GPU) paces output at the requested
+// rate, as compositor does on the CPU paths. Otherwise videorate does. The
+// difference matters to VA encoders: they choose zero output delay only when
+// a latency query reports a live upstream, and they ask once, at their first
+// caps. pipewiresrc can answer "not live" until its stream properties arrive,
+// which races that query and leaves the encoder holding 4 frames (~133 ms at
+// 30 fps). An aggregator with force-live answers "live" itself.
+func buildVAWaylandVideoPipeline(fd int, nodeID uint32, fps int, encoder encoderResult, maxWidth, maxHeight int, timestampedOutput bool, liveCompositor bool) []string {
 	source := pipeWireVideoSourceStage(fd, nodeID, fps, false)
 	args := append([]string{"--quiet"}, source...)
 	// Desktop pixels are square. Without this constraint, the VA transform can
@@ -1011,7 +1024,11 @@ func buildVAWaylandVideoPipeline(fd int, nodeID uint32, fps int, encoder encoder
 		caps += fmt.Sprintf(",width=%d,height=%d,pixel-aspect-ratio=1/1", maxWidth&^1, maxHeight&^1)
 	}
 	args = appendGstStage(args, gstStage{caps})
-	args = appendGstStage(args, waylandFramePacingStage())
+	if liveCompositor {
+		args = appendGstStage(args, gstStage{"vacompositor", "force-live=true", "ignore-inactive-pads=true"})
+	} else {
+		args = appendGstStage(args, waylandFramePacingStage())
+	}
 	args = appendGstStage(args, gstStage{caps + fmt.Sprintf(",framerate=%d/1", fps)})
 	args = appendGstStage(args, lowLatencyVideoQueueStage())
 	return appendGstVideoEncoding(args, encoder, timestampedOutput)
@@ -1042,8 +1059,14 @@ func vaPostprocSystemFormat(encoderFormat string) (string, bool) {
 }
 
 func waylandCapturePlans(encoder encoderResult, hasElement func(string) bool) []waylandCapturePlan {
-	plans := make([]waylandCapturePlan, 0, 2)
+	plans := make([]waylandCapturePlan, 0, 3)
 	if canBuildVAWaylandVideoPipeline(encoder, hasElement) {
+		// Prefer live VA pacing so the encoder runs without output delay; keep
+		// the videorate variant as a fallback for drivers where vacompositor
+		// fails to start.
+		if hasElement("vacompositor") {
+			plans = append(plans, waylandCapturePlan{encoder: encoder, mode: waylandPipelineVAMemoryLive})
+		}
 		plans = append(plans, waylandCapturePlan{encoder: encoder, mode: waylandPipelineVAMemory})
 	} else if canBuildVAPostprocPlainRawWaylandVideoPipeline(encoder, hasElement) {
 		// Scale while the frame is still handled by the VA postprocessor, then
@@ -1147,7 +1170,7 @@ func buildVAPostprocPlainRawWaylandVideoPipeline(fd int, nodeID uint32, fps int,
 // fit the actual video stream directly to the receiver's canvas.
 func buildWaylandVideoPipeline(fd int, nodeID uint32, fps int, encoder encoderResult, maxWidth, maxHeight int, _ [2]int, timestampedOutput bool, hasElement func(string) bool) []string {
 	if canBuildVAWaylandVideoPipeline(encoder, hasElement) {
-		return buildVAWaylandVideoPipeline(fd, nodeID, fps, encoder, maxWidth, maxHeight, timestampedOutput)
+		return buildVAWaylandVideoPipeline(fd, nodeID, fps, encoder, maxWidth, maxHeight, timestampedOutput, hasElement("vacompositor"))
 	}
 	if canBuildVAPostprocPlainRawWaylandVideoPipeline(encoder, hasElement) {
 		return buildVAPostprocPlainRawWaylandVideoPipeline(fd, nodeID, fps, encoder, maxWidth, maxHeight, timestampedOutput)
@@ -1157,8 +1180,10 @@ func buildWaylandVideoPipeline(fd int, nodeID uint32, fps int, encoder encoderRe
 
 func buildWaylandVideoPipelineForPlan(fd int, nodeID uint32, fps int, plan waylandCapturePlan, maxWidth, maxHeight int, timestampedOutput bool) []string {
 	switch plan.mode {
+	case waylandPipelineVAMemoryLive:
+		return buildVAWaylandVideoPipeline(fd, nodeID, fps, plan.encoder, maxWidth, maxHeight, timestampedOutput, true)
 	case waylandPipelineVAMemory:
-		return buildVAWaylandVideoPipeline(fd, nodeID, fps, plan.encoder, maxWidth, maxHeight, timestampedOutput)
+		return buildVAWaylandVideoPipeline(fd, nodeID, fps, plan.encoder, maxWidth, maxHeight, timestampedOutput, false)
 	case waylandPipelineVAPostprocPlainRaw:
 		return buildVAPostprocPlainRawWaylandVideoPipeline(fd, nodeID, fps, plan.encoder, maxWidth, maxHeight, timestampedOutput)
 	default:
